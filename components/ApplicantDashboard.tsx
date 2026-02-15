@@ -4,6 +4,7 @@ import { ApplicantAccount, Candidate, Job, CandidateStage } from '../types';
 import { supabase } from '../lib/supabase';
 import { BrandLogo, FileIcon, RotateCwIcon, BriefcaseIcon, CheckIcon, MapPinIcon, XIcon } from './Icons';
 import { Modal } from './Modal';
+import { registerPasskey, getPasskeyStatus } from '../lib/passkey';
 
 interface ApplicantDashboardProps {
   applicant: ApplicantAccount;
@@ -59,11 +60,19 @@ const ApplicantDashboard: React.FC<ApplicantDashboardProps> = ({
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [selectedAppForStatus, setSelectedAppForStatus] = useState<Candidate | null>(null);
 
+  const [passkeyStatus, setPasskeyStatus] = useState<{ hasPasskey: boolean; count: number }>({ hasPasskey: false, count: 0 });
+  const [isRegisteringPasskey, setIsRegisteringPasskey] = useState(false);
+  const [passkeyMsg, setPasskeyMsg] = useState<string | null>(null);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setProfileData(applicant);
   }, [applicant]);
+
+  useEffect(() => {
+    getPasskeyStatus().then(setPasskeyStatus).catch(() => {});
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -194,6 +203,25 @@ const ApplicantDashboard: React.FC<ApplicantDashboardProps> = ({
       onUpdateApplicant(updated);
     };
     reader.readAsDataURL(file);
+  };
+
+  const handleRegisterPasskey = async () => {
+    setIsRegisteringPasskey(true);
+    setPasskeyMsg(null);
+    try {
+      await registerPasskey();
+      setPasskeyMsg('Passkey registered successfully!');
+      const status = await getPasskeyStatus();
+      setPasskeyStatus(status);
+    } catch (err: any) {
+      if (err.name === 'NotAllowedError') {
+        setPasskeyMsg('Passkey registration was cancelled.');
+      } else {
+        setPasskeyMsg(err?.message || 'Failed to register passkey.');
+      }
+    } finally {
+      setIsRegisteringPasskey(false);
+    }
   };
 
   const getStatusColorClass = (stage: string) => {
@@ -527,11 +555,35 @@ const ApplicantDashboard: React.FC<ApplicantDashboardProps> = ({
 
               <div className="bg-white border border-gray-100 rounded-[2.5rem] p-10 shadow-xl shadow-gray-200/20">
                 <h3 className="text-xl font-black text-gray-900 uppercase tracking-tighter mb-4">Account Security</h3>
-                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest leading-relaxed mb-8">
-                  Password management is simulated in this MVP build.
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest leading-relaxed mb-6">
+                  Set up a passkey for faster, passwordless sign-in.
                 </p>
-                <button className="w-full px-6 py-4 bg-gray-50 border border-gray-100 text-[10px] font-black text-gray-400 uppercase tracking-widest rounded-2xl cursor-not-allowed">
-                  Reset Password
+                {passkeyMsg && (
+                  <div className={`mb-4 p-3 rounded-2xl text-[10px] font-black uppercase tracking-widest text-center ${passkeyMsg.includes('success') ? 'bg-emerald-50 text-emerald-600 border border-emerald-100' : 'bg-red-50 text-red-600 border border-red-100'}`}>
+                    {passkeyMsg}
+                  </div>
+                )}
+                {passkeyStatus.hasPasskey && (
+                  <div className="mb-4 p-3 bg-emerald-50 border border-emerald-100 rounded-2xl flex items-center gap-2 justify-center">
+                    <CheckIcon className="w-3.5 h-3.5 text-emerald-500" />
+                    <span className="text-[10px] font-black text-emerald-600 uppercase tracking-widest">
+                      {passkeyStatus.count} Passkey{passkeyStatus.count > 1 ? 's' : ''} Registered
+                    </span>
+                  </div>
+                )}
+                <button
+                  onClick={handleRegisterPasskey}
+                  disabled={isRegisteringPasskey}
+                  className="w-full px-6 py-4 bg-gray-900 text-white text-[10px] font-black uppercase tracking-widest rounded-2xl hover:bg-red-600 transition-all shadow-lg shadow-gray-900/10 disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  {isRegisteringPasskey ? (
+                    <RotateCwIcon className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <>
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                      {passkeyStatus.hasPasskey ? 'Add Another Passkey' : 'Register Passkey'}
+                    </>
+                  )}
                 </button>
               </div>
             </div>

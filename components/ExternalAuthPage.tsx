@@ -4,6 +4,7 @@ import { supabase } from "../lib/supabase";
 import { BrandSymbol, RotateCwIcon } from './Icons';
 import { ApplicantAccount } from '../types';
 import { signInWithEmail, signUpWithEmail } from '../lib/auth';
+import { authenticateWithPasskey } from '../lib/passkey';
 
 interface ExternalAuthPageProps {
   onLogin: (account: ApplicantAccount) => void;
@@ -13,6 +14,7 @@ interface ExternalAuthPageProps {
 const ExternalAuthPage: React.FC<ExternalAuthPageProps> = ({ onLogin, onBack }) => {
   const [mode, setMode] = useState<'login' | 'signup'>('login');
   const [isLoading, setIsLoading] = useState(false);
+  const [isPasskeyLoading, setIsPasskeyLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     email: '',
@@ -63,6 +65,26 @@ const ExternalAuthPage: React.FC<ExternalAuthPageProps> = ({ onLogin, onBack }) 
     };
 
     onLogin(loggedInAccount);
+  };
+
+  const handlePasskeyLogin = async () => {
+    setIsPasskeyLoading(true);
+    setErrorMsg(null);
+    try {
+      await authenticateWithPasskey();
+      // Session is now established, fetch user
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('Failed to get user after passkey auth');
+      await handleAuthSuccess(user);
+    } catch (err: any) {
+      if (err.name === 'NotAllowedError') {
+        setErrorMsg('Passkey authentication was cancelled.');
+      } else {
+        setErrorMsg(err?.message || 'Passkey authentication failed.');
+      }
+    } finally {
+      setIsPasskeyLoading(false);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -240,6 +262,31 @@ const ExternalAuthPage: React.FC<ExternalAuthPageProps> = ({ onLogin, onBack }) 
               )}
             </button>
           </form>
+
+          {mode === 'login' && (
+            <div className="mt-6">
+              <div className="relative flex py-3 items-center">
+                <div className="flex-grow border-t border-gray-100"></div>
+                <span className="flex-shrink mx-4 text-[9px] font-black text-gray-300 uppercase tracking-[0.2em]">Or</span>
+                <div className="flex-grow border-t border-gray-100"></div>
+              </div>
+              <button
+                type="button"
+                onClick={handlePasskeyLogin}
+                disabled={isPasskeyLoading}
+                className="w-full flex items-center justify-center gap-3 py-5 border border-gray-200 rounded-2xl text-[10px] font-black uppercase tracking-widest text-gray-700 bg-white hover:bg-gray-50 hover:border-gray-300 hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+              >
+                {isPasskeyLoading ? (
+                  <RotateCwIcon className="w-4 h-4 animate-spin" />
+                ) : (
+                  <>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                    Sign In with Passkey
+                  </>
+                )}
+              </button>
+            </div>
+          )}
 
           <div className="mt-8 text-center border-t border-gray-50 pt-8">
             <button

@@ -24,6 +24,7 @@ const ExternalJobsPage: React.FC<ExternalJobsPageProps> = ({
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [activeDept, setActiveDept] = useState('All');
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const openJobs = useMemo(() => jobs.filter(j => j.status === 'Open'), [jobs]);
   
@@ -43,8 +44,8 @@ const ExternalJobsPage: React.FC<ExternalJobsPageProps> = ({
   return (
     <div className="min-h-screen bg-white font-sans selection:bg-red-100">
       {/* Brand Navigation Header - Fixed to Top */}
-      <nav className="fixed top-0 inset-x-0 bg-white/90 backdrop-blur-xl border-b border-gray-100 z-50 transition-all h-20">
-        <div className="max-w-6xl mx-auto px-6 h-full flex items-center justify-between">
+      <nav className="fixed top-0 inset-x-0 bg-white/90 backdrop-blur-xl border-b border-gray-100 z-50 transition-all">
+        <div className="max-w-6xl mx-auto px-6 h-20 flex items-center justify-between">
           <button 
             onClick={onLogoClick}
             className="group flex items-center outline-none"
@@ -67,10 +68,27 @@ const ExternalJobsPage: React.FC<ExternalJobsPageProps> = ({
               </button>
             )}
           </div>
-          <button className="md:hidden p-2 text-gray-400">
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg>
+          <button className="md:hidden p-2 text-gray-400" onClick={() => setMobileMenuOpen(!mobileMenuOpen)}>
+            {mobileMenuOpen ? (
+              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><line x1="18" x2="6" y1="6" y2="18"/><line x1="6" x2="18" y1="6" y2="18"/></svg>
+            ) : (
+              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg>
+            )}
           </button>
         </div>
+        {mobileMenuOpen && (
+          <div className="md:hidden border-t border-gray-100 bg-white px-6 py-4 flex flex-col gap-3">
+            {applicant ? (
+              <button onClick={() => { onGoToProfile(); setMobileMenuOpen(false); }} className="w-full px-6 py-3 bg-gray-900 text-white text-[10px] font-black uppercase tracking-[0.2em] rounded-xl hover:bg-red-600 transition-all">
+                My Dashboard
+              </button>
+            ) : (
+              <button onClick={() => { onLogin(); setMobileMenuOpen(false); }} className="w-full px-6 py-3 bg-gray-50 text-gray-900 border border-gray-200 text-[10px] font-black uppercase tracking-[0.2em] rounded-xl hover:bg-gray-100 transition-all">
+                Sign In
+              </button>
+            )}
+          </div>
+        )}
       </nav>
 
       {/* Hero Section - Padding adjusted for Top Fixed Nav */}
