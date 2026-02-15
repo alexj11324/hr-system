@@ -2,6 +2,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ApplicantAccount, Candidate, Job, CandidateStage } from '../types';
 import { supabase } from '../lib/supabase';
+import { registerPasskey } from '../lib/auth';
 import { BrandLogo, FileIcon, RotateCwIcon, BriefcaseIcon, CheckIcon, MapPinIcon, XIcon } from './Icons';
 import { Modal } from './Modal';
 
@@ -194,6 +195,20 @@ const ApplicantDashboard: React.FC<ApplicantDashboardProps> = ({
       onUpdateApplicant(updated);
     };
     reader.readAsDataURL(file);
+  };
+
+  const handleRegisterPasskey = async () => {
+    try {
+      await registerPasskey();
+      alert("Passkey successfully registered! You can now use it to sign in.");
+    } catch (err: any) {
+      console.error("Passkey registration failed:", err);
+      let friendlyError = err?.message ?? "Failed to register passkey.";
+      if (friendlyError.toLowerCase().includes("webauthn is not supported")) {
+        friendlyError = "Passkeys are not supported on this device or browser.";
+      }
+      alert(friendlyError);
+    }
   };
 
   const getStatusColorClass = (stage: string) => {
@@ -528,8 +543,14 @@ const ApplicantDashboard: React.FC<ApplicantDashboardProps> = ({
               <div className="bg-white border border-gray-100 rounded-[2.5rem] p-10 shadow-xl shadow-gray-200/20">
                 <h3 className="text-xl font-black text-gray-900 uppercase tracking-tighter mb-4">Account Security</h3>
                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest leading-relaxed mb-8">
-                  Password management is simulated in this MVP build.
+                  Manage your security credentials.
                 </p>
+                <button
+                  onClick={handleRegisterPasskey}
+                  className="w-full px-6 py-4 bg-gray-900 text-white text-[10px] font-black uppercase tracking-widest rounded-2xl hover:bg-red-600 transition-all shadow-xl shadow-gray-900/10 mb-4"
+                >
+                  Register Passkey
+                </button>
                 <button className="w-full px-6 py-4 bg-gray-50 border border-gray-100 text-[10px] font-black text-gray-400 uppercase tracking-widest rounded-2xl cursor-not-allowed">
                   Reset Password
                 </button>

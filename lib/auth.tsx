@@ -22,3 +22,17 @@ export async function getCurrentUser() {
   if (error) throw error;
   return data.user;
 }
+
+export async function signInWithPasskey(email: string) {
+  const { data, error } = await supabase.auth.signInWithWebAuthn({ email });
+  if (error) throw error;
+  return data;
+}
+
+export async function registerPasskey() {
+  const { data, error } = await supabase.auth.mfa.challengeAndEnroll({
+    factorType: 'webauthn',
+  });
+  if (error) throw error;
+  return data;
+}

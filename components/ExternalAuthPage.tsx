@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 import { supabase } from "../lib/supabase";
 import { BrandSymbol, RotateCwIcon } from './Icons';
 import { ApplicantAccount } from '../types';
-import { signInWithEmail, signUpWithEmail } from '../lib/auth';
+import { signInWithEmail, signUpWithEmail, signInWithPasskey } from '../lib/auth';
 
 interface ExternalAuthPageProps {
   onLogin: (account: ApplicantAccount) => void;
@@ -128,6 +128,33 @@ const ExternalAuthPage: React.FC<ExternalAuthPageProps> = ({ onLogin, onBack }) 
     }
   };
 
+  const handlePasskeyLogin = async () => {
+    setIsLoading(true);
+    setErrorMsg(null);
+    try {
+      if (!formData.email) {
+        setErrorMsg("Please enter your email address for passkey login.");
+        setIsLoading(false);
+        return;
+      }
+
+      const res = await signInWithPasskey(formData.email);
+      const user = res.user ?? res.session?.user;
+
+      if (!user) throw new Error("Passkey authentication failed.");
+      await handleAuthSuccess(user);
+    } catch (err: any) {
+      console.error("Passkey auth error:", err);
+      let friendlyError = err?.message ?? 'Passkey authentication failed.';
+       if (friendlyError.toLowerCase().includes("webauthn is not supported")) {
+        friendlyError = "Passkeys are not supported on this device or browser.";
+      }
+      setErrorMsg(friendlyError);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8 font-sans selection:bg-red-100">
       <div className="sm:mx-auto sm:w-full sm:max-w-md">
@@ -239,6 +266,17 @@ const ExternalAuthPage: React.FC<ExternalAuthPageProps> = ({ onLogin, onBack }) 
                 mode === 'login' ? 'Sign In to Portal' : 'Create Account'
               )}
             </button>
+
+            {mode === 'login' && (
+              <button
+                type="button"
+                onClick={handlePasskeyLogin}
+                disabled={isLoading}
+                className="w-full flex justify-center py-5 border border-gray-200 rounded-2xl shadow-sm text-[10px] font-black uppercase tracking-widest text-gray-900 bg-white hover:bg-gray-50 hover:scale-[1.02] active:scale-95 transition-all mt-4 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Sign In with Passkey
+              </button>
+            )}
           </form>
 
           <div className="mt-8 text-center border-t border-gray-50 pt-8">
