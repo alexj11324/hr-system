@@ -187,6 +187,28 @@ const App: React.FC = () => {
     [applyCandidateSession, clearCandidateState]
   );
 
+  const recoverCandidateSession = useCallback(
+    async (preferredView: ViewState): Promise<boolean> => {
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        const user = session?.user ?? null;
+        if (!user?.email || user.email === HR_EMAIL) {
+          return false;
+        }
+        addAuthBreadcrumb('recover-candidate-session', { preferredView });
+        await applyCandidateSession(user, preferredView);
+        return true;
+      } catch (error) {
+        console.error('Failed to recover candidate session:', error);
+        addAuthBreadcrumb('recover-candidate-session-failed', { preferredView }, 'error');
+        return false;
+      }
+    },
+    [applyCandidateSession]
+  );
+
   const handleGlobalReset = useCallback(async () => {
     setCurrentUser(null);
     localStorage.removeItem(ADMIN_USER_KEY);
@@ -299,6 +321,24 @@ const App: React.FC = () => {
   }, [currentView, selectedJobForApplication]);
 
   useEffect(() => {
+    if (authPhase !== 'ready') return;
+    if (currentApplicant) return;
+    if (currentView !== 'external_profile' && currentView !== 'application_form') return;
+
+    let cancelled = false;
+    const recover = async () => {
+      const recovered = await recoverCandidateSession(currentView);
+      if (cancelled || recovered) return;
+      setCurrentView('external_auth');
+    };
+
+    void recover();
+    return () => {
+      cancelled = true;
+    };
+  }, [authPhase, currentApplicant, currentView, recoverCandidateSession]);
+
+  useEffect(() => {
     if (currentView !== 'application_form' || selectedJobForApplication) return;
     if (!pendingApplicationJobId) {
       setCurrentView('external_profile');
@@ -332,6 +372,32 @@ const App: React.FC = () => {
     const nextView = selectedJobForApplication ? 'application_form' : 'external_profile';
     setCurrentView(nextView);
   };
+
+  const handleExternalLoginIntent = useCallback(async () => {
+    const recovered = await recoverCandidateSession('external_profile');
+    if (!recovered) {
+      setCurrentView('external_auth');
+    }
+  }, [recoverCandidateSession]);
+
+  const handleExternalApply = useCallback(
+    async (job: Job) => {
+      setSelectedJobForApplication(job);
+      setPendingApplicationJobId(job.id);
+      localStorage.setItem(LAST_APPLICATION_JOB_KEY, job.id);
+
+      if (currentApplicant) {
+        setCurrentView('application_form');
+        return;
+      }
+
+      const recovered = await recoverCandidateSession('application_form');
+      if (!recovered) {
+        setCurrentView('external_auth');
+      }
+    },
+    [currentApplicant, recoverCandidateSession]
+  );
 
   const handleApplicantLogout = async () => {
     await supabase.auth.signOut();
@@ -459,13 +525,12 @@ const App: React.FC = () => {
             applicant={currentApplicant}
             appliedJobIds={appliedJobIds}
             onApply={(job) => {
-              setSelectedJobForApplication(job);
-              setPendingApplicationJobId(job.id);
-              if (!currentApplicant) setCurrentView('external_auth');
-              else setCurrentView('application_form');
+              void handleExternalApply(job);
             }}
             onGoToProfile={() => setCurrentView('external_profile')}
-            onLogin={() => setCurrentView('external_auth')}
+            onLogin={() => {
+              void handleExternalLoginIntent();
+            }}
             onLogoClick={handleGlobalReset}
           />
         );
@@ -502,12 +567,12 @@ const App: React.FC = () => {
             applicant={currentApplicant}
             appliedJobIds={appliedJobIds}
             onApply={(job) => {
-              setSelectedJobForApplication(job);
-              setPendingApplicationJobId(job.id);
-              setCurrentView('application_form');
+              void handleExternalApply(job);
             }}
             onGoToProfile={() => setCurrentView('external_profile')}
-            onLogin={() => setCurrentView('external_auth')}
+            onLogin={() => {
+              void handleExternalLoginIntent();
+            }}
             onLogoClick={handleGlobalReset}
           />
         );
