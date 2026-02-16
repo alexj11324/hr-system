@@ -88,8 +88,10 @@ const App: React.FC = () => {
         const { data } = await supabase.auth.getSession();
         const user = data.session?.user ?? null;
         if (mounted) {
-          if (user?.email && user.email !== HR_EMAIL) await fetchProfile(user.id, user.email);
-          else { setCurrentApplicant(null); setAppliedJobIds([]); }
+          if (user?.email && user.email !== HR_EMAIL) {
+            await fetchProfile(user.id, user.email);
+            setCurrentView('external_profile');
+          } else { setCurrentApplicant(null); setAppliedJobIds([]); }
           setAuthChecked(true);
         }
       } catch (e) {
@@ -100,8 +102,10 @@ const App: React.FC = () => {
     const { data: sub } = supabase.auth.onAuthStateChange(async (_event, session) => {
       if (!mounted) return;
       const user = session?.user ?? null;
-      if (user?.email && user.email !== HR_EMAIL) await fetchProfile(user.id, user.email);
-      else { setCurrentApplicant(null); setAppliedJobIds([]); }
+      if (user?.email && user.email !== HR_EMAIL) {
+        await fetchProfile(user.id, user.email);
+        setCurrentView(prev => ['dashboard', 'external_auth'].includes(prev) ? 'external_profile' : prev);
+      } else { setCurrentApplicant(null); setAppliedJobIds([]); }
     });
     return () => { mounted = false; sub.subscription.unsubscribe(); };
   }, []);
