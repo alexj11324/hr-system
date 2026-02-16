@@ -82,7 +82,9 @@ export const mapDbJobToFrontend = (dbJob: any): Job => {
     description: dbJob.description || '',
     location: dbJob.location,
     status: dbJob.status,
-    postedDate: new Date(dbJob.created_at).toISOString().split('T')[0],
+    postedDate: dbJob.created_at
+      ? new Date(dbJob.created_at).toISOString().split('T')[0]
+      : new Date().toISOString().split('T')[0],
   };
 };
 

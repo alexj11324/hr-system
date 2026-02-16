@@ -112,9 +112,16 @@ const App: React.FC = () => {
     setIsAuthLoading(false);
     const fetchData = async () => {
       setIsLoadingData(true);
-      await fetchJobs();
-      setEmployees(MOCK_EMPLOYEES);
-      setIsLoadingData(false);
+      try {
+        await fetchJobs();
+        setEmployees(MOCK_EMPLOYEES);
+      } catch (e) {
+        console.error("Failed to fetch data:", e);
+        setJobs(MOCK_JOBS);
+        setEmployees(MOCK_EMPLOYEES);
+      } finally {
+        setIsLoadingData(false);
+      }
     };
     fetchData();
   }, []);
