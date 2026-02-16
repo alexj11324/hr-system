@@ -73,6 +73,7 @@ type ProfileRow = {
 const normalizeStage = (status?: string | null): CandidateStage => {
   const s = (status ?? '').trim().toLowerCase();
   const map: Record<string, CandidateStage> = {
+    pending: 'Applied',
     submitted: 'Applied',
     applied: 'Applied',
     qualified: 'Qualified',
@@ -170,7 +171,7 @@ const CandidatesPage: React.FC<CandidatesPageProps> = ({ onSelectCandidate }) =>
         salaryRange: `$${(j.salary_min || 0) / 1000}k - $${(j.salary_max || 0) / 1000}k`,
         location: j.location,
         status: j.status,
-        postedDate: j.created_at.split('T')[0]
+        postedDate: j.created_at ? j.created_at.split('T')[0] : new Date().toISOString().split('T')[0]
       } as any)));
     } else {
       setJobs(MOCK_JOBS);

@@ -11,7 +11,7 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
-app.use(express.json({ limit: '5mb' }));
+app.use(express.json({ limit: '100kb' }));
 
 // --- Config ---
 const SUPABASE_URL = 'https://xhncdveikphwxoazoudl.supabase.co';
@@ -184,20 +184,23 @@ app.post('/api/passkey/auth-verify', async (req, res) => {
       return res.status(400).json({ error: 'Credential not found' });
     }
 
-    // Find the matching challenge
-    const challengeKey = Object.keys(Object.fromEntries(challenges)).find(k => k.startsWith('auth_'));
-    // Try to find the challenge from the clientDataJSON
-    let expectedChallenge;
-    for (const [key, val] of challenges.entries()) {
-      if (key.startsWith('auth_')) {
-        expectedChallenge = val;
-        // We'll try verification with each stored auth challenge
-        break;
-      }
+    // Extract challenge from the client's response to look up the correct stored challenge
+    if (!req.body.response?.clientDataJSON) {
+      return res.status(400).json({ error: 'Invalid authentication response' });
+    }
+    let challengeFromClient;
+    try {
+      const clientData = JSON.parse(
+        Buffer.from(req.body.response.clientDataJSON, 'base64url').toString()
+      );
+      challengeFromClient = clientData.challenge;
+    } catch {
+      return res.status(400).json({ error: 'Invalid clientDataJSON' });
     }
 
+    const expectedChallenge = challenges.get(`auth_${challengeFromClient}`);
     if (!expectedChallenge) {
-      return res.status(400).json({ error: 'Challenge expired' });
+      return res.status(400).json({ error: 'Challenge expired or invalid' });
     }
 
     const publicKeyBytes = Uint8Array.from(
@@ -281,8 +284,15 @@ app.get('/api/passkey/status', async (req, res) => {
 });
 
 // --- Static files ---
+// Hashed assets get long-lived immutable cache
+app.use('/assets', express.static(path.join(__dirname, 'dist', 'assets'), {
+  maxAge: '1y',
+  immutable: true,
+}));
 app.use(express.static(path.join(__dirname, 'dist')));
+// SPA fallback — never cache index.html so deploys take effect immediately
 app.get('{*path}', (req, res) => {
+  res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
 });
 

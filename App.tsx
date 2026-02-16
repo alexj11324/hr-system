@@ -88,7 +88,11 @@ const App: React.FC = () => {
         const { data } = await supabase.auth.getSession();
         const user = data.session?.user ?? null;
         if (mounted) {
-          if (user?.email && user.email !== HR_EMAIL) await fetchProfile(user.id, user.email);
+          if (user?.email && user.email !== HR_EMAIL) {
+            await fetchProfile(user.id, user.email);
+            // Restore applicant portal view on refresh
+            setCurrentView('external_profile');
+          }
           else { setCurrentApplicant(null); setAppliedJobIds([]); }
           setAuthChecked(true);
         }
@@ -135,7 +139,7 @@ const App: React.FC = () => {
     const [firstName, ...lastParts] = applicationData.name.split(' ');
     const lastName = lastParts.join(' ');
     
-    await supabase.from("profiles").upsert({
+    const { error: profileError } = await supabase.from("profiles").upsert({
       id: user.id,
       email: applicationData.email,
       first_name: firstName || applicationData.firstName || '',
@@ -143,11 +147,16 @@ const App: React.FC = () => {
       phone: applicationData.phone,
       role: 'applicant'
     });
+    if (profileError) {
+      console.error("Failed to update profile:", profileError.message);
+    }
 
     const { error } = await supabase.from("job_applications").insert({
       user_id: user.id,
       job_id: selectedJobForApplication?.id ?? null,
       job_title: selectedJobForApplication?.title ?? null,
+      first_name: firstName || applicationData.firstName || '',
+      last_name: lastName || applicationData.lastName || '',
       email: applicationData.email,
       phone: applicationData.phone,
       linkedin: applicationData.linkedin,
@@ -157,7 +166,8 @@ const App: React.FC = () => {
       gender: applicationData.gender,
       race: applicationData.race,
       application_type: applicationData.type,
-      resume_url: applicationData.resume?.fileData ?? null
+      resume_url: applicationData.resume?.fileData ?? null,
+      status: 'Applied'
     });
 
     if (error) { alert("Submission failed: " + error.message); return; }
@@ -201,7 +211,11 @@ const App: React.FC = () => {
     }
   };
 
-  if (isAuthLoading) return null;
+  if (isAuthLoading || (!currentUser && !authChecked)) return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-600"></div>
+    </div>
+  );
   const isExternalPortalView = ['external_jobs', 'application_form', 'external_auth', 'external_profile'].includes(currentView);
   if (isExternalPortalView) {
     return (
