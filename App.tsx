@@ -1,7 +1,8 @@
-
-import React, { useState, useEffect } from 'react';
-import { supabase } from "./lib/supabase";
-import { Job, ViewState, Employee, Candidate, ApplicantAccount } from './types';
+import React, { useCallback, useEffect, useState } from 'react';
+import * as Sentry from '@sentry/react';
+import { supabase } from './lib/supabase';
+import { bootstrapAuthState } from './lib/authBootstrap';
+import { Job, ViewState, Employee, ApplicantAccount } from './types';
 import { MOCK_JOBS, MOCK_EMPLOYEES } from './constants';
 import Dashboard from './components/Dashboard';
 import JobsPage from './components/JobsPage';
@@ -21,137 +22,354 @@ import { BrandSymbol } from './components/Icons';
 import { mapDbJobToFrontend, mapFrontendJobToDb } from './lib/utils';
 
 const HR_EMAIL = 'hr@cardioguard.com';
+const AUTH_TIMEOUT_MS = 8000;
+const ADMIN_USER_KEY = 'cardio_guard_current_user';
+const LAST_VIEW_KEY = 'cardio_guard_last_view';
+const LAST_APPLICATION_JOB_KEY = 'cardio_guard_last_application_job';
+
+const PERSISTED_VIEWS = new Set<ViewState>([
+  'dashboard',
+  'external_jobs',
+  'external_auth',
+  'external_profile',
+  'application_form',
+]);
+
+const CANDIDATE_VIEWS = new Set<ViewState>([
+  'external_jobs',
+  'external_profile',
+  'application_form',
+]);
+
+const parseView = (value: string | null): ViewState | null => {
+  if (!value) return null;
+  return PERSISTED_VIEWS.has(value as ViewState) ? (value as ViewState) : null;
+};
+
+const addAuthBreadcrumb = (
+  message: string,
+  data?: Record<string, unknown>,
+  level: 'info' | 'warning' | 'error' = 'info'
+) => {
+  Sentry.addBreadcrumb({
+    category: 'auth.state',
+    message,
+    data,
+    level,
+  });
+  if (level === 'error') {
+    Sentry.captureMessage(`[auth.state] ${message}`, 'warning');
+  }
+};
 
 const App: React.FC = () => {
-  const [currentUser, setCurrentUser] = useState<string | null>(null);
-  const [isAuthLoading, setIsAuthLoading] = useState(true);
+  const [authPhase, setAuthPhase] = useState<'bootstrapping' | 'ready'>('bootstrapping');
+  const [currentUser, setCurrentUser] = useState<string | null>(() => localStorage.getItem(ADMIN_USER_KEY));
   const [currentApplicant, setCurrentApplicant] = useState<ApplicantAccount | null>(null);
   const [appliedJobIds, setAppliedJobIds] = useState<string[]>([]);
-  const [authChecked, setAuthChecked] = useState(false);
-  const [currentView, setCurrentView] = useState<ViewState>('dashboard');
+  const [currentView, setCurrentView] = useState<ViewState>(() => parseView(localStorage.getItem(LAST_VIEW_KEY)) ?? 'external_jobs');
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
   const [selectedJobForApplication, setSelectedJobForApplication] = useState<Job | null>(null);
+  const [pendingApplicationJobId, setPendingApplicationJobId] = useState<string | null>(() => localStorage.getItem(LAST_APPLICATION_JOB_KEY));
   const [searchTerm, setSearchTerm] = useState('');
   const [jobs, setJobs] = useState<Job[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [isLoadingData, setIsLoadingData] = useState(true);
 
-  const handleGlobalReset = async () => {
-    setCurrentUser(null);
-    localStorage.removeItem('cardio_guard_current_user');
-    await supabase.auth.signOut();
+  const clearCandidateState = useCallback(() => {
     setCurrentApplicant(null);
     setAppliedJobIds([]);
-    setCurrentView('dashboard');
     setSelectedJobForApplication(null);
-    setSelectedCandidateId(null);
-  };
+    setPendingApplicationJobId(null);
+    localStorage.removeItem(LAST_APPLICATION_JOB_KEY);
+  }, []);
 
-  const fetchAppliedJobIds = async (userId: string) => {
+  const resolvePublicView = useCallback((preferred: ViewState | null): ViewState => {
+    if (preferred === 'external_auth' || preferred === 'external_jobs') {
+      return preferred;
+    }
+    return 'external_jobs';
+  }, []);
+
+  const fetchAppliedJobIds = useCallback(async (userId: string) => {
     const { data, error } = await supabase.from('job_applications').select('job_id').eq('user_id', userId);
-    if (!error && data) setAppliedJobIds(data.map(item => item.job_id).filter(Boolean));
-  };
+    if (!error && data) {
+      setAppliedJobIds(data.map((item) => item.job_id).filter(Boolean));
+      return;
+    }
+    setAppliedJobIds([]);
+  }, []);
 
-  const fetchJobs = async () => {
-    const { data, error } = await supabase.from('jobs').select('*').order('created_at', { ascending: false });
-    if (!error && data) setJobs(data.map(mapDbJobToFrontend));
-    else setJobs(MOCK_JOBS);
-  };
-
-  useEffect(() => {
-    let mounted = true;
-    const fetchProfile = async (userId: string, email: string) => {
-      if (email === HR_EMAIL) {
-        if (mounted) { setCurrentApplicant(null); setAppliedJobIds([]); }
-        return;
-      }
+  const fetchProfile = useCallback(
+    async (userId: string, email: string): Promise<ApplicantAccount> => {
       const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).single();
-      if (mounted && !error && data) {
-        setCurrentApplicant({
+      if (!error && data) {
+        return {
           id: userId,
-          email: email,
+          email,
           firstName: data.first_name || '',
           lastName: data.last_name || '',
           phone: data.phone || '',
-          resume: data.resume_url ? { fileName: 'Resume', fileData: data.resume_url, uploadedAt: data.updated_at || data.created_at } : undefined,
+          resume: data.resume_url
+            ? { fileName: 'Resume', fileData: data.resume_url, uploadedAt: data.updated_at || data.created_at }
+            : undefined,
           createdAt: data.created_at || new Date().toISOString(),
-        });
-        await fetchAppliedJobIds(userId);
-      } else if (mounted) {
-        setCurrentApplicant({ id: userId, email: email, firstName: '', lastName: '', phone: '', createdAt: new Date().toISOString() });
-        await fetchAppliedJobIds(userId);
+        };
       }
-    };
+      return { id: userId, email, firstName: '', lastName: '', phone: '', createdAt: new Date().toISOString() };
+    },
+    []
+  );
 
-    const checkSession = async () => {
-      try {
-        const { data } = await supabase.auth.getSession();
-        const user = data.session?.user ?? null;
-        if (mounted) {
-          if (user?.email && user.email !== HR_EMAIL) {
-            await fetchProfile(user.id, user.email);
-            // Restore applicant portal view on refresh
-            setCurrentView('external_profile');
-          }
-          else { setCurrentApplicant(null); setAppliedJobIds([]); }
-          setAuthChecked(true);
-        }
-      } catch (e) {
-        if (mounted) setAuthChecked(true);
+  const fetchJobs = useCallback(async () => {
+    try {
+      const { data, error } = await supabase.from('jobs').select('*').order('created_at', { ascending: false });
+      if (!error && data) {
+        setJobs(data.map(mapDbJobToFrontend));
+        return;
       }
-    };
-    checkSession();
-    const { data: sub } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      if (!mounted) return;
-      const user = session?.user ?? null;
-      if (user?.email && user.email !== HR_EMAIL) await fetchProfile(user.id, user.email);
-      else { setCurrentApplicant(null); setAppliedJobIds([]); }
-    });
-    return () => { mounted = false; sub.subscription.unsubscribe(); };
+      setJobs(MOCK_JOBS);
+    } catch (error) {
+      console.error('Failed to fetch jobs, using fallback data:', error);
+      setJobs(MOCK_JOBS);
+    }
   }, []);
+
+  const applyCandidateSession = useCallback(
+    async (user: { id: string; email?: string | null }, preferredView: ViewState | null) => {
+      if (!user.email) throw new Error('Candidate session missing email');
+      const profile = await fetchProfile(user.id, user.email);
+      await fetchAppliedJobIds(user.id);
+      setCurrentApplicant(profile);
+      setCurrentUser(null);
+      localStorage.removeItem(ADMIN_USER_KEY);
+
+      const resolvedView =
+        preferredView && CANDIDATE_VIEWS.has(preferredView) ? preferredView : 'external_profile';
+      if (resolvedView === 'application_form') {
+        const storedJobId = localStorage.getItem(LAST_APPLICATION_JOB_KEY);
+        if (storedJobId) {
+          setPendingApplicationJobId(storedJobId);
+          setCurrentView('application_form');
+        } else {
+          setCurrentView('external_profile');
+        }
+      } else {
+        setCurrentView(resolvedView);
+      }
+    },
+    [fetchAppliedJobIds, fetchProfile]
+  );
+
+  const handleAuthChange = useCallback(
+    async (event: string, session: { user?: { id: string; email?: string | null } } | null) => {
+      const user = session?.user ?? null;
+      addAuthBreadcrumb('on-auth-state-change', { event, hasSession: !!user });
+
+      if (user?.email && user.email !== HR_EMAIL) {
+        try {
+          await applyCandidateSession(user, parseView(localStorage.getItem(LAST_VIEW_KEY)));
+        } catch (error) {
+          console.error('Auth state change handling failed:', error);
+          addAuthBreadcrumb('auth-change-candidate-failed', { event }, 'error');
+          clearCandidateState();
+          setCurrentView('external_auth');
+        }
+        return;
+      }
+
+      clearCandidateState();
+      if (event === 'SIGNED_OUT') {
+        const storedAdmin = localStorage.getItem(ADMIN_USER_KEY);
+        setCurrentView(storedAdmin ? 'dashboard' : 'external_jobs');
+      }
+    },
+    [applyCandidateSession, clearCandidateState]
+  );
+
+  const handleGlobalReset = useCallback(async () => {
+    setCurrentUser(null);
+    localStorage.removeItem(ADMIN_USER_KEY);
+    localStorage.removeItem(LAST_VIEW_KEY);
+    clearCandidateState();
+    await supabase.auth.signOut();
+    setCurrentView('dashboard');
+    setSelectedCandidateId(null);
+  }, [clearCandidateState]);
 
   useEffect(() => {
-    const storedUser = localStorage.getItem('cardio_guard_current_user');
-    if (storedUser) setCurrentUser(storedUser);
-    setIsAuthLoading(false);
+    let mounted = true;
+
+    const bootstrap = async () => {
+      setAuthPhase('bootstrapping');
+      const preferredView = parseView(localStorage.getItem(LAST_VIEW_KEY));
+      const result = await bootstrapAuthState({ timeoutMs: AUTH_TIMEOUT_MS, retries: 1 });
+      if (!mounted) return;
+
+      if (result.error) {
+        console.error('Session bootstrap failed:', result.error);
+        addAuthBreadcrumb(
+          'session-bootstrap-error',
+          { attempts: result.attempts, timedOut: result.timedOut },
+          'error'
+        );
+      }
+      if (result.timedOut) {
+        addAuthBreadcrumb('session-bootstrap-timeout', {
+          attempts: result.attempts,
+          recovered: result.recovered,
+        });
+      }
+
+      const user = result.session?.user ?? null;
+      if (user?.email && user.email !== HR_EMAIL) {
+        try {
+          await applyCandidateSession(user, preferredView);
+        } catch (error) {
+          console.error('Failed to apply candidate session:', error);
+          addAuthBreadcrumb('apply-candidate-session-failed', undefined, 'error');
+          clearCandidateState();
+          setCurrentView('external_auth');
+        } finally {
+          if (mounted) setAuthPhase('ready');
+        }
+        return;
+      }
+
+      clearCandidateState();
+      const storedAdmin = localStorage.getItem(ADMIN_USER_KEY);
+      if (storedAdmin) {
+        setCurrentUser(storedAdmin);
+        setCurrentView('dashboard');
+      } else {
+        setCurrentView(resolvePublicView(preferredView));
+      }
+      setAuthPhase('ready');
+    };
+
+    void bootstrap();
+
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+      setTimeout(() => {
+        if (!mounted) return;
+        void handleAuthChange(event, session as { user?: { id: string; email?: string | null } } | null);
+      }, 0);
+    });
+
+    return () => {
+      mounted = false;
+      sub.subscription.unsubscribe();
+    };
+  }, [applyCandidateSession, clearCandidateState, handleAuthChange, resolvePublicView]);
+
+  useEffect(() => {
     const fetchData = async () => {
       setIsLoadingData(true);
-      await fetchJobs();
-      setEmployees(MOCK_EMPLOYEES);
-      setIsLoadingData(false);
+      try {
+        await fetchJobs();
+        setEmployees(MOCK_EMPLOYEES);
+      } catch (error) {
+        console.error('Initial data load failed:', error);
+        setJobs(MOCK_JOBS);
+        setEmployees(MOCK_EMPLOYEES);
+      } finally {
+        setIsLoadingData(false);
+      }
     };
-    fetchData();
-  }, []);
+    void fetchData();
+  }, [fetchJobs]);
 
-  const handleLogin = (user: string) => { setCurrentUser(user); localStorage.setItem('cardio_guard_current_user', user); setCurrentView('dashboard'); };
-  const handleLogout = () => { setCurrentUser(null); localStorage.removeItem('cardio_guard_current_user'); };
-  const handleApplicantLogin = (applicant: ApplicantAccount) => { setCurrentApplicant(applicant); if (selectedJobForApplication) setCurrentView('application_form'); else setCurrentView('external_profile'); };
-  const handleApplicantLogout = async () => { await supabase.auth.signOut(); setCurrentApplicant(null); setAppliedJobIds([]); setCurrentView('external_jobs'); };
+  useEffect(() => {
+    if (PERSISTED_VIEWS.has(currentView)) {
+      localStorage.setItem(LAST_VIEW_KEY, currentView);
+    }
+  }, [currentView]);
+
+  useEffect(() => {
+    if (currentView === 'application_form' && selectedJobForApplication?.id) {
+      localStorage.setItem(LAST_APPLICATION_JOB_KEY, selectedJobForApplication.id);
+      setPendingApplicationJobId(selectedJobForApplication.id);
+      return;
+    }
+    if (currentView !== 'application_form') {
+      localStorage.removeItem(LAST_APPLICATION_JOB_KEY);
+      setPendingApplicationJobId(null);
+      setSelectedJobForApplication(null);
+    }
+  }, [currentView, selectedJobForApplication]);
+
+  useEffect(() => {
+    if (currentView !== 'application_form' || selectedJobForApplication) return;
+    if (!pendingApplicationJobId) {
+      setCurrentView('external_profile');
+      return;
+    }
+    const restoredJob = jobs.find((job) => job.id === pendingApplicationJobId);
+    if (restoredJob) {
+      setSelectedJobForApplication(restoredJob);
+      return;
+    }
+    if (!isLoadingData) {
+      setCurrentView('external_profile');
+      localStorage.removeItem(LAST_APPLICATION_JOB_KEY);
+      setPendingApplicationJobId(null);
+    }
+  }, [currentView, isLoadingData, jobs, pendingApplicationJobId, selectedJobForApplication]);
+
+  const handleLogin = (user: string) => {
+    setCurrentUser(user);
+    localStorage.setItem(ADMIN_USER_KEY, user);
+    setCurrentView('dashboard');
+  };
+
+  const handleLogout = () => {
+    setCurrentUser(null);
+    localStorage.removeItem(ADMIN_USER_KEY);
+  };
+
+  const handleApplicantLogin = (applicant: ApplicantAccount) => {
+    setCurrentApplicant(applicant);
+    const nextView = selectedJobForApplication ? 'application_form' : 'external_profile';
+    setCurrentView(nextView);
+  };
+
+  const handleApplicantLogout = async () => {
+    await supabase.auth.signOut();
+    clearCandidateState();
+    setCurrentView('external_jobs');
+  };
+
   const handleUpdateApplicant = (updated: ApplicantAccount) => setCurrentApplicant(updated);
-  const handleSelectCandidate = (id: string) => { setSelectedCandidateId(id); setCurrentView('candidate_detail'); };
+  const handleSelectCandidate = (id: string) => {
+    setSelectedCandidateId(id);
+    setCurrentView('candidate_detail');
+  };
 
   const handleNewApplication = async (applicationData: any) => {
     const { data: sessionData } = await supabase.auth.getSession();
     const user = sessionData.session?.user;
-    if (!user) { alert("Session expired."); setCurrentView("external_auth"); return; }
+    if (!user) {
+      alert('Session expired.');
+      setCurrentView('external_auth');
+      return;
+    }
 
-    // IDENTIFICATION SOURCE FIX: Ensure names from form are written to the Profile table
     const [firstName, ...lastParts] = applicationData.name.split(' ');
     const lastName = lastParts.join(' ');
-    
-    const { error: profileError } = await supabase.from("profiles").upsert({
+
+    const { error: profileError } = await supabase.from('profiles').upsert({
       id: user.id,
       email: applicationData.email,
       first_name: firstName || applicationData.firstName || '',
       last_name: lastName || applicationData.lastName || '',
       phone: applicationData.phone,
-      role: 'applicant'
+      role: 'applicant',
     });
     if (profileError) {
-      console.error("Failed to update profile:", profileError.message);
+      console.error('Failed to update profile:', profileError.message);
     }
 
-    const { error } = await supabase.from("job_applications").insert({
+    const { error } = await supabase.from('job_applications').insert({
       user_id: user.id,
       job_id: selectedJobForApplication?.id ?? null,
       job_title: selectedJobForApplication?.title ?? null,
@@ -167,55 +385,145 @@ const App: React.FC = () => {
       race: applicationData.race,
       application_type: applicationData.type,
       resume_url: applicationData.resume?.fileData ?? null,
-      status: 'Applied'
+      status: 'Applied',
     });
 
-    if (error) { alert("Submission failed: " + error.message); return; }
-    if (selectedJobForApplication?.id) setAppliedJobIds(prev => [...prev, selectedJobForApplication.id]);
-    alert("Application received!");
-    setCurrentView("external_profile");
+    if (error) {
+      alert('Submission failed: ' + error.message);
+      return;
+    }
+    if (selectedJobForApplication?.id) {
+      setAppliedJobIds((prev) => [...prev, selectedJobForApplication.id]);
+    }
+    alert('Application received!');
+    setCurrentView('external_profile');
   };
 
   const handleAddJob = async (newJob: Job) => {
     const { error } = await supabase.from('jobs').insert([mapFrontendJobToDb(newJob)]);
-    if (!error) fetchJobs();
+    if (!error) void fetchJobs();
   };
 
   const handleUpdateJob = async (updatedJob: Job) => {
     const { error } = await supabase.from('jobs').update(mapFrontendJobToDb(updatedJob)).eq('id', updatedJob.id);
-    if (!error) fetchJobs();
+    if (!error) void fetchJobs();
   };
 
   const handleDeleteJob = async (id: string) => {
     const { error } = await supabase.from('jobs').delete().eq('id', id);
-    if (!error) fetchJobs();
+    if (!error) void fetchJobs();
   };
 
   const renderContent = () => {
-    if (isLoadingData) return <div className="flex items-center justify-center h-full"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-600"></div></div>;
+    if (isLoadingData) {
+      return (
+        <div className="flex items-center justify-center h-full">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-600"></div>
+        </div>
+      );
+    }
     switch (currentView) {
-      case 'dashboard': return <Dashboard jobs={jobs} employees={employees} />;
-      case 'jobs': return <JobsPage jobs={jobs} employees={employees} onAddJob={handleAddJob} onUpdateJob={handleUpdateJob} onDeleteJob={handleDeleteJob} />;
-      case 'employees': return <EmployeesPage employees={employees} onAddEmployee={() => {}} onUpdateEmployee={() => {}} onDeleteEmployee={() => {}} />;
-      case 'candidates': return <CandidatesPage onSelectCandidate={handleSelectCandidate} />;
-      case 'candidate_detail': return <CandidateProfilePage candidateId={selectedCandidateId} onBack={() => setCurrentView('candidates')} />;
-      case 'ai_assistant': return <AiAssistant />;
-      case 'settings': return <SettingsPage />;
-      case 'external_jobs': return <ExternalJobsPage jobs={jobs} applicant={currentApplicant} appliedJobIds={appliedJobIds} onApply={(job) => { setSelectedJobForApplication(job); if (!currentApplicant) setCurrentView('external_auth'); else setCurrentView('application_form'); }} onGoToProfile={() => setCurrentView('external_profile')} onLogin={() => setCurrentView('external_auth')} onLogoClick={handleGlobalReset} />;
-      case 'external_auth': return <ExternalAuthPage onLogin={handleApplicantLogin} onBack={() => setCurrentView('external_jobs')} onLogoClick={handleGlobalReset} />;
-      case 'external_profile': return currentApplicant ? <ApplicantDashboard applicant={currentApplicant} onLogout={handleApplicantLogout} onBackToJobs={() => setCurrentView('external_jobs')} onUpdateApplicant={handleUpdateApplicant} allJobs={jobs} onLogoClick={handleGlobalReset} /> : <ExternalAuthPage onLogin={handleApplicantLogin} onBack={() => setCurrentView('external_jobs')} onLogoClick={handleGlobalReset} />;
-      case 'application_form': 
-        if (!currentApplicant) return <ExternalAuthPage onLogin={handleApplicantLogin} onBack={() => setCurrentView('external_jobs')} onLogoClick={handleGlobalReset} />;
-        return selectedJobForApplication ? <ApplicationFormPage job={selectedJobForApplication} applicant={currentApplicant} onBack={() => setCurrentView('external_jobs')} onSubmit={handleNewApplication} onLogoClick={handleGlobalReset} /> : <ExternalJobsPage jobs={jobs} applicant={currentApplicant} appliedJobIds={appliedJobIds} onApply={(job) => { setSelectedJobForApplication(job); setCurrentView('application_form'); }} onGoToProfile={() => setCurrentView('external_profile')} onLogin={() => setCurrentView('external_auth')} onLogoClick={handleGlobalReset} />;
-      default: return <Dashboard jobs={jobs} employees={employees} />;
+      case 'dashboard':
+        return <Dashboard jobs={jobs} employees={employees} />;
+      case 'jobs':
+        return (
+          <JobsPage
+            jobs={jobs}
+            employees={employees}
+            onAddJob={handleAddJob}
+            onUpdateJob={handleUpdateJob}
+            onDeleteJob={handleDeleteJob}
+          />
+        );
+      case 'employees':
+        return (
+          <EmployeesPage
+            employees={employees}
+            onAddEmployee={() => {}}
+            onUpdateEmployee={() => {}}
+            onDeleteEmployee={() => {}}
+          />
+        );
+      case 'candidates':
+        return <CandidatesPage onSelectCandidate={handleSelectCandidate} />;
+      case 'candidate_detail':
+        return <CandidateProfilePage candidateId={selectedCandidateId} onBack={() => setCurrentView('candidates')} />;
+      case 'ai_assistant':
+        return <AiAssistant />;
+      case 'settings':
+        return <SettingsPage />;
+      case 'external_jobs':
+        return (
+          <ExternalJobsPage
+            jobs={jobs}
+            applicant={currentApplicant}
+            appliedJobIds={appliedJobIds}
+            onApply={(job) => {
+              setSelectedJobForApplication(job);
+              setPendingApplicationJobId(job.id);
+              if (!currentApplicant) setCurrentView('external_auth');
+              else setCurrentView('application_form');
+            }}
+            onGoToProfile={() => setCurrentView('external_profile')}
+            onLogin={() => setCurrentView('external_auth')}
+            onLogoClick={handleGlobalReset}
+          />
+        );
+      case 'external_auth':
+        return <ExternalAuthPage onLogin={handleApplicantLogin} onBack={() => setCurrentView('external_jobs')} onLogoClick={handleGlobalReset} />;
+      case 'external_profile':
+        return currentApplicant ? (
+          <ApplicantDashboard
+            applicant={currentApplicant}
+            onLogout={handleApplicantLogout}
+            onBackToJobs={() => setCurrentView('external_jobs')}
+            onUpdateApplicant={handleUpdateApplicant}
+            allJobs={jobs}
+            onLogoClick={handleGlobalReset}
+          />
+        ) : (
+          <ExternalAuthPage onLogin={handleApplicantLogin} onBack={() => setCurrentView('external_jobs')} onLogoClick={handleGlobalReset} />
+        );
+      case 'application_form':
+        if (!currentApplicant) {
+          return <ExternalAuthPage onLogin={handleApplicantLogin} onBack={() => setCurrentView('external_jobs')} onLogoClick={handleGlobalReset} />;
+        }
+        return selectedJobForApplication ? (
+          <ApplicationFormPage
+            job={selectedJobForApplication}
+            applicant={currentApplicant}
+            onBack={() => setCurrentView('external_jobs')}
+            onSubmit={handleNewApplication}
+            onLogoClick={handleGlobalReset}
+          />
+        ) : (
+          <ExternalJobsPage
+            jobs={jobs}
+            applicant={currentApplicant}
+            appliedJobIds={appliedJobIds}
+            onApply={(job) => {
+              setSelectedJobForApplication(job);
+              setPendingApplicationJobId(job.id);
+              setCurrentView('application_form');
+            }}
+            onGoToProfile={() => setCurrentView('external_profile')}
+            onLogin={() => setCurrentView('external_auth')}
+            onLogoClick={handleGlobalReset}
+          />
+        );
+      default:
+        return <Dashboard jobs={jobs} employees={employees} />;
     }
   };
 
-  if (isAuthLoading || (!currentUser && !authChecked)) return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50">
-      <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-600"></div>
-    </div>
-  );
+  if (authPhase === 'bootstrapping') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-600"></div>
+      </div>
+    );
+  }
+
   const isExternalPortalView = ['external_jobs', 'application_form', 'external_auth', 'external_profile'].includes(currentView);
   if (isExternalPortalView) {
     return (
@@ -223,13 +531,23 @@ const App: React.FC = () => {
         {renderContent()}
         {currentUser && (
           <div className="fixed bottom-6 right-6 z-[100] animate-fade-in">
-            <button onClick={() => setCurrentView('dashboard')} className="bg-gray-900 text-white px-6 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest border border-white/10 hover:bg-red-600 transition-all shadow-2xl flex items-center gap-3 group"><BrandSymbol className="w-5 h-5 group-hover:scale-110 transition-transform" />Return to Admin</button>
+            <button
+              onClick={() => setCurrentView('dashboard')}
+              className="bg-gray-900 text-white px-6 py-3 rounded-2xl text-[10px] font-black uppercase tracking-widest border border-white/10 hover:bg-red-600 transition-all shadow-2xl flex items-center gap-3 group"
+            >
+              <BrandSymbol className="w-5 h-5 group-hover:scale-110 transition-transform" />
+              Return to Admin
+            </button>
           </div>
         )}
       </div>
     );
   }
-  if (!currentUser) return <LoginPage onLogin={handleLogin} onGoToCareers={() => setCurrentView('external_jobs')} />;
+
+  if (!currentUser) {
+    return <LoginPage onLogin={handleLogin} onGoToCareers={() => setCurrentView('external_jobs')} />;
+  }
+
   return (
     <div className="flex h-screen bg-gray-50 font-sans">
       <Sidebar currentView={currentView} onViewChange={(view) => setCurrentView(view)} onLogoClick={handleGlobalReset} />
