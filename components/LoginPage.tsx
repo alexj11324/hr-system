@@ -1,8 +1,9 @@
 
 import React, { useState } from 'react';
-import { BrandSymbol, BriefcaseIcon, UsersIcon, ArrowLeftIcon } from './Icons';
+import { BrandSymbol, BriefcaseIcon, UsersIcon, ArrowLeftIcon, RotateCwIcon } from './Icons';
 import { ALLOWED_USERS } from '../constants';
 import { supabase } from '../lib/supabase';
+import { signInWithPasskey } from '../lib/auth';
 
 interface LoginPageProps {
   onLogin: (user: string) => void;
@@ -17,6 +18,7 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin, onGoToCareers }) => {
   const [selectedUser, setSelectedUser] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [email, setEmail] = useState('');
 
   const handleAdminSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -35,8 +37,8 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin, onGoToCareers }) => {
           email: HR_EMAIL,
           password: HR_PASSWORD,
         });
-        
-        // If the HR account doesn't exist or credentials are wrong, 
+
+        // If the HR account doesn't exist or credentials are wrong,
         // we log a warning but still allow the user to enter the dashboard
         // to view mock data, as this is a Sprint 1 MVP.
         if (error) {
@@ -54,6 +56,41 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin, onGoToCareers }) => {
       console.error("Internal access error:", err);
       setAuthError("Unexpected error. Proceeding in Limited Mode.");
       setTimeout(() => onLogin(selectedUser), 1500);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handlePasskeyLogin = async () => {
+    setIsSubmitting(true);
+    setAuthError(null);
+    try {
+      if (!email) {
+        setAuthError("Please enter your email address for passkey login.");
+        setIsSubmitting(false);
+        return;
+      }
+
+      const res = await signInWithPasskey(email);
+      const user = res.user ?? res.session?.user;
+
+      if (!user) throw new Error("Passkey authentication failed.");
+
+      // Check if user is HR staff
+      if (user.email === HR_EMAIL) {
+        // Find matching user in ALLOWED_USERS or default to first user
+        const matchedUser = ALLOWED_USERS[0]; // Default to first user for HR access
+        onLogin(matchedUser);
+      } else {
+        setAuthError("Passkey authentication is for authorized HR personnel only.");
+      }
+    } catch (err: any) {
+      console.error("Passkey auth error:", err);
+      let friendlyError = err?.message ?? 'Passkey authentication failed.';
+      if (friendlyError.toLowerCase().includes("webauthn is not supported")) {
+        friendlyError = "Passkeys are not supported on this device or browser.";
+      }
+      setAuthError(friendlyError);
     } finally {
       setIsSubmitting(false);
     }
@@ -199,6 +236,42 @@ const LoginPage: React.FC<LoginPageProps> = ({ onLogin, onGoToCareers }) => {
                   </button>
                 </div>
               </form>
+
+              <div className="relative flex py-4 items-center">
+                <div className="flex-grow border-t border-gray-100"></div>
+                <span className="flex-shrink mx-4 text-[9px] font-black text-gray-300 uppercase tracking-[0.3em]">Or</span>
+                <div className="flex-grow border-t border-gray-100"></div>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <label htmlFor="email" className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-3">
+                    Email for Passkey Login
+                  </label>
+                  <input
+                    id="email"
+                    type="email"
+                    className="w-full px-4 py-4 border border-gray-100 rounded-2xl text-sm font-bold focus:ring-2 focus:ring-red-600 outline-none bg-gray-50 transition-all"
+                    placeholder="hr@cardioguard.com"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    disabled={isSubmitting}
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handlePasskeyLogin}
+                  disabled={isSubmitting}
+                  className="w-full flex justify-center py-5 border border-gray-200 rounded-2xl shadow-sm text-[10px] font-black uppercase tracking-widest text-gray-900 bg-white hover:bg-gray-50 hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isSubmitting ? (
+                    <RotateCwIcon className="w-4 h-4 animate-spin" />
+                  ) : (
+                    'Sign In with Passkey'
+                  )}
+                </button>
+              </div>
 
               <div className="bg-red-50/50 p-6 rounded-2xl border border-red-100/50">
                 <p className="text-[9px] text-red-700 font-bold uppercase tracking-widest leading-relaxed text-center">
